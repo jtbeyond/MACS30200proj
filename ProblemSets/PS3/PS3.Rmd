@@ -1,0 +1,706 @@
+---
+title: "Problem Set #3: Hodgepodge"
+author: "MACS 30200 - Perspectives on Computational Research"
+date: "**Due Monday May 15th at 11:30am**"
+output:
+  github_document:
+    toc: true
+---
+
+```{r setup, include = FALSE}
+library(tidyverse)
+library(forcats)
+library(broom)
+library(modelr)
+library(stringr)
+library(ISLR)
+library(rcfss)
+library(haven)
+library(car)
+library(pander)
+#install.packages("lmtest")
+library(lmtest)
+# devtools::install_github("jaredlander/coefplot")
+library(coefplot)
+
+#install.packages("GGally")
+library(GGally)
+#install.packages("Amelia")
+library(Amelia)
+
+options(digits = 3)
+set.seed(1234)
+theme_set(theme_minimal())
+
+```
+
+## Regression diagnostics
+
+#### 1. Test the model to identify any unusual and/or influential observations. Identify how you would treat these observations moving forward with this research. Note you do not actually have to estimate a new model, just explain what you would do. This could include things like dropping observations, respecifying the model, or collecting additional variables to control for this influential effect.
+
+*Biden Warmth* = *β*<sub>0</sub> + *β*<sub>1</sub>*Age* + *β*<sub>2</sub>*Gender* + *β*<sub>3</sub>*Education*
+
+In this model, *Gender* is 0 when the respondent is a male.The parameters and standard errors of this model has been shown in the following table. The result indicates that gender and education have strong association with the warmth toward Biden (*p*<0.005). If the respondent is female, the warmth toward Biden will be higher by averagely 6.196 than the male respondents with all the other varaibles fixed. However, as one year increases in education, the score of warmth toward Biden will be slightly decreased by a factor of 0.889 on avarage, with other conditions invaraint.In addition, three plots for the warmth toward Biden versus gender, age and eudcation were illustrated below.  
+
+```{r Regression-1, warning=FALSE, error=FALSE, message=FALSE}
+# If you have any problems with the directory setting to load data, please try the following code:
+#dir=getwd()
+#dir_new = paste(dir, "/ProblemSets/PS3", sep = "")
+#setwd(dir_new)
+
+biden <- read_csv("data/biden.csv")
+df <-na.omit(biden) %>%
+  mutate (gender = ifelse (female == 0, "male", "female"))
+biden_mod <- lm(biden ~ age + gender + educ, data = df)
+pander(tidy(biden_mod))
+
+ggplot(df, aes(gender, biden)) +
+  geom_boxplot() +
+  labs(x = "gender",
+       y = "Warmth toward Biden",
+       title = "Warmth toward Biden by gender")
+
+ggplot(df, aes(age, biden)) +
+  geom_point(alpha=0.2, color = "red") +
+  labs(x = "age",
+       y = "Warmth toward Biden",
+       title = "Warmth toward Biden by age")
+
+ggplot(df, aes(educ, biden)) +
+  geom_point(alpha=0.2, color = "blue") +
+  labs(x = "education years",
+       y = "Warmth toward Biden",
+       title = "Warmth toward Biden by education")
+
+```
+
+According to the bubble plot (x axis:Leverage; y axis:discrepancy; size: influence) for the unusual and/or influential observations for Biden themometer data (below), we can identify some observations with education years of 4, 9, 14,16, with large size of bubble, have large influence of an observation due to high discrepancy.  
+```{r Regression-1.1, warning=FALSE, error=FALSE, message=FALSE}
+# add key statistics
+df_augment <- df %>%
+  mutate(hat = hatvalues(biden_mod),
+         student = rstudent(biden_mod),
+         cooksd = cooks.distance(biden_mod))
+
+# draw bubble plot
+ggplot(df_augment, aes(hat, student)) +
+  geom_hline(yintercept = 0, linetype = 2) +
+  geom_point(aes(size = cooksd), shape = 1) +
+  geom_text(data = df_augment %>%
+              arrange(-cooksd) %>%
+              slice(1:10),
+            aes(label = educ)) +
+  scale_size_continuous(range = c(1, 20)) +
+  labs(x = "Leverage",
+       y = "Studentized residual",
+       title = "Bubble Plot for unusual or/and influential observations") +
+  theme(legend.position = "none")
+
+```
+
+Also, based on the criteria of hat being larger than (k+1)/n, 74 "unusual" observations were obtained. With regard to the Studentized residues, 82 observations with discrepancy outside the range of 2 to -2 were selected out. Moreover, 90 "odd" observations with significant influence of the suggested model were also found.  
+```{r Regression-1.2, warning=FALSE, error=FALSE, message=FALSE}
+
+df_augment %>%
+  filter (hat > 2* mean (hat))
+
+df_augment %>%
+  filter(abs(student) > 2)
+
+df_augment %>%
+  filter(cooksd > 4 / (nrow(.) - (length(coef(biden_mod)) - 1) - 1))
+```
+
+First, it appears for those odd observations there is no obvious pattern in particular varaibles. Therefore, I guess those odd observations are merely outliers for the model we test, and it is not necessay to respecify the model itself. To examine this hypothesis, the common outliers based upon the above three criterion were removed.
+
+```{r Regression-1.3, warning=FALSE, error=FALSE, message=FALSE}
+#filter out the unusual data
+df_omit<-df_augment %>%
+  filter (hat < 2* mean (hat)) %>%
+  filter(abs(student) < 2)%>%
+  filter (cooksd < 4 / (nrow(.) - (length(coef(biden_mod)) - 1) - 1))
+
+biden_omit_mod <- lm(biden ~ age + gender + educ, data = df_omit)
+
+pander(tidy(biden_omit_mod))
+
+multiplot(biden_mod,biden_omit_mod,names = c("All observations",
+                              "Omit outliers")) +
+  theme(legend.position = "bottom")
+
+
+```
+
+In the above coeffecient plot for the two data set, we can conclude there is not so much change from the original model:
+
+* The estimated coeffecient for age become a little bit bigger, while for gender and education, the coeffecients become a bit smaller.
+
+* There is no obvious change in the standard error for all the coefficients. 
+
+* In the model by using the data without the outliers, there is a much stronger association between age and gender with the warmth toward Biden.
+
+* R square value is larger for the omitted observation model, and the RMSE is smaller (R square for the original observation model: `r rsquare(biden_mod, df)`; for the omited observation model: `r rsquare(biden_omit_mod, df_omit)`; RMSE for the original observation model: `r rmse(biden_mod, df)`; for the omited observation model: `r rmse(biden_omit_mod, df_omit)`
+
+These omited observations mostly influenced the precision of the estimates, not the accuracy of them.
+
+#### 2. Test for non-normally distributed errors. If they are not normally distributed, propose how to correct for them.
+
+First, accrodign to the quantile-comparison plot (below), clearly,the observations with the quantile below -2 and above 2, fall outside the 95% coffidence intervals, indicating that these observations are not normally distributed. 
+```{r Regression-2-1, warning=FALSE, error=FALSE, message=FALSE}
+
+car::qqPlot(biden_mod)
+
+```
+
+Secondly, from the density plot of the studentized residuals (below), we can also see that the residuals are dramaticaly skewed.
+```{r Regression-2-2, warning=FALSE, error=FALSE, message=FALSE}
+
+augment(biden_mod, df) %>%
+  mutate(.student = rstudent(biden_mod)) %>%
+  ggplot(aes(.student)) +
+  geom_density(adjust = .5) +
+  labs(x = "Studentized residuals",
+       y = "Estimated density")
+```
+
+In order to fix the non-normally distributed errors, first, I tried the logistic transformation of the dependent variable, that is the warmth toward Biden. Then, I tested the normality of the residues of such logistic regressed model by quantile-comparison plot as follows. However, to transform the dependent vaariable does not help correct the non-normally distributed errors. 
+
+```{r Regression-2-3, warning=FALSE, error=FALSE, message=FALSE}
+
+df2<-df %>%
+  filter (biden != 0) %>%
+  mutate (biden_log = log(biden))  
+
+biden_log_mod <- lm( biden_log ~ age + gender + educ, data = df2)
+
+pander(tidy(biden_log_mod)) 
+
+car::qqPlot(biden_log_mod) 
+
+```
+
+Therefore, according to Tukey and Mosteller's "Bulging Rule" for monotone transformations to linearity, I attempt to transform the age and education year to the polynorminal forms or logistic forms. By trail-and-error, I found the polinormial transformation can fix this problem a little bit. In the following two plots, we could see, under this model, more observations will fall in the 95% coffidence intervals and the denstiy plot of the studentized residue becomes a bit symmetric, although still not perfect.   
+
+```{r Regression-2-4, warning=FALSE, error=FALSE, message=FALSE}
+
+df3<-df %>%
+  mutate(educ_2 = educ^2) %>%
+  mutate(educ_3 = educ^3) %>%
+  mutate(educ_4 = educ^4) %>%
+  mutate(age_2 = age^2) %>%
+  mutate(age_3 = age^3) %>%
+  mutate(age_4 = age^4)
+
+biden_mod2 <- lm(biden ~  gender + age + age_2+ age_3 + age_4 + educ + educ_2 + educ_3 + educ_4, data = df3)
+
+pander(tidy(biden_mod2)) 
+
+car::qqPlot(biden_mod2) 
+
+augment(biden_mod2, df) %>%
+  mutate(.student = rstudent(biden_mod2)) %>%
+  ggplot(aes(.student)) +
+  geom_density(adjust = .5) +
+  labs(x = "Studentized residuals for the polinomial model",
+       y = "Estimated density for the polinomial model")
+```
+
+
+#### 3. Test for heteroscedasticity in the model. If present, explain what impact this could have on inference.
+By the Breusch-Pagan test, the null hypothesis of homogeneous residues is rejected, indicating heteroscedasticity is present. The Heteroscedastic variance of error terms is also plotted as below.
+
+* the impact of heteroscedasticity: 
+Although it is possible that our estimated parameters will not be unbiased, our estimates of the standard errors will be inaccurate - they will either be inflated or deflated, leading to incorrect inferences about the statistical significance of predictor variables.
+
+Therefore, in the following section, I will try to solve this problem by weighting the errors of each predicate. 
+
+
+```{r Regression-3, warning=FALSE, error=FALSE, message=FALSE}
+
+bptest(biden_mod)
+
+
+df %>%
+  add_predictions(biden_mod) %>%
+  add_residuals(biden_mod) %>%
+  ggplot(aes(pred, resid)) +
+  geom_point(alpha = .2) +
+  geom_hline(yintercept = 0, linetype = 2) +
+  geom_quantile(method = "rqss", lambda = 5, quantiles = c(.05, .95)) +
+  labs(title = "Heteroscedastic variance of error terms",
+       x = "Predicted values",
+       y = "Residuals")
+
+```
+
+In order to accounting for heteroscedasticity,the weighted least squares regression is tried. By using this method, there are mild changes in the estimated parameters, when comparing the statistical summay tables below for the model before and after weighting. However, the drastic reductions in the standard errors could be found. 
+
+```{r Regression-3-2, warning=FALSE, error=FALSE, message=FALSE}
+
+weights <- 1 / residuals(biden_mod)^2
+
+biden_wls <- lm(biden ~ age+gender+educ, data = df, weights = weights)
+
+pander(tidy(biden_mod))
+
+pander(tidy(biden_wls))
+```
+
+Alternatively, I have also tried the procedure of Huber-White standard errors to correct for the variance-covariance estimates, which only adjusts the standard errors to account for the violation of the constant error variance assumption:
+```{r Regression-3-3, warning=FALSE, error=FALSE, message=FALSE}
+
+hw_std_err <- hccm(biden_mod, type = "hc1") %>%
+  diag %>%
+  sqrt
+
+x<-tidy(biden_mod) %>%
+  mutate(std.error.rob = hw_std_err)
+
+pander(x)
+```
+
+#### 4. Test for multicollinearity. If present, propose if/how to solve the problem.
+
+
+First, in the following partial residue plot, it is obvious that the relation between the reponse variable with the age is relatively linear, but with the education year is not. we can correct this by using the polinormial forms of education years as in the question 3 above.
+
+```{r Regression-4-1, warning=FALSE, error=FALSE, message=FALSE}
+# get partial resids
+biden_resid <- residuals(biden_mod, type = "partial") %>%
+  as_tibble
+names(biden_resid) <- str_c(names(biden_resid), "_resid")
+
+biden_diag <- augment(biden_mod, df) %>%
+  bind_cols(biden_resid)
+
+ggplot(biden_diag, aes(age, age_resid)) +
+  geom_point(alpha = .1) +
+  geom_smooth(se = FALSE) +
+  geom_smooth(method = "lm", se = FALSE, linetype = 2) +
+  labs(x = "Age",
+       y = "Partial residual for age")
+
+ggplot(biden_diag, aes(educ, educ_resid)) +
+  geom_point(alpha = .1) +
+  geom_smooth(se = FALSE) +
+  geom_smooth(method = "lm", se = FALSE, linetype = 2) +
+  labs(x = "Education",
+       y = "Partial residual for education")
+
+```
+
+After the correction by polynomial transformation, the problem in the partial linerality has been solved. 
+
+```{r Regression-4-2, warning=FALSE, error=FALSE, message=FALSE}
+
+biden_poly<-lm (biden ~ gender + educ + I(educ^2)+ I(educ^3) + I(educ^4) + age, data =df)
+pander(tidy(biden_poly))
+
+biden_poly_resid <- residuals(biden_poly, type = "partial") %>%
+  as_tibble
+
+names(biden_poly_resid) <- c("gender", "educ", "educ_2", "educ_3", "educ_4", "age")
+names(biden_poly_resid) <- str_c(names(biden_poly_resid), "_resid")
+
+biden_poly_diag <- augment(biden_poly, df) %>%
+  as_tibble %>%
+  mutate(educ_resid = coef(biden_poly)[[3]] * educ + coef(biden_poly)[[4]] * educ^2 + coef(biden_poly)[[5]] * educ^3 + coef(biden_poly)[[6]] * educ)
+
+
+ggplot(biden_poly_diag, aes(educ, educ_resid + .resid)) +
+  geom_point(alpha = .1) +
+  geom_smooth(aes(y = educ_resid), se = FALSE) +
+  geom_smooth(se = FALSE, linetype = 2) +
+  labs(x = "Education",
+       y = "Partial residual for educ")       
+
+```
+
+Second, in order to detect the multicollinearity, I tried two correlation test below for all the explantory variables in this data set, and I did not find any evidence that there exists the multicollinearity within age, educ and gender. 
+
+```{r Regression-4-3, warning=FALSE, error=FALSE, message=FALSE}
+
+cormat_heatmap <- function(data){
+  # generate correlation matrix
+  cormat <- round(cor(data), 2)
+  
+  # melt into a tidy table
+  get_upper_tri <- function(cormat){
+    cormat[lower.tri(cormat)]<- NA
+    return(cormat)
+  }
+  
+  upper_tri <- get_upper_tri(cormat)
+  
+  # reorder matrix based on coefficient value
+  reorder_cormat <- function(cormat){
+    # Use correlation between variables as distance
+    dd <- as.dist((1-cormat)/2)
+    hc <- hclust(dd)
+    cormat <-cormat[hc$order, hc$order]
+  }
+  
+  cormat <- reorder_cormat(cormat)
+  upper_tri <- get_upper_tri(cormat)
+  
+  # Melt the correlation matrix
+  melted_cormat <- reshape2::melt(upper_tri, na.rm = TRUE)
+  
+  # Create a ggheatmap
+  ggheatmap <- ggplot(melted_cormat, aes(Var2, Var1, fill = value))+
+    geom_tile(color = "white")+
+    scale_fill_gradient2(low = "blue", high = "red", mid = "white", 
+                         midpoint = 0, limit = c(-1,1), space = "Lab", 
+                         name="Pearson\nCorrelation") +
+    theme_minimal()+ # minimal theme
+    theme(axis.text.x = element_text(angle = 45, vjust = 1, 
+                                     size = 12, hjust = 1))+
+    coord_fixed()
+  
+  # add correlation values to graph
+  ggheatmap + 
+    geom_text(aes(Var2, Var1, label = value), color = "black", size = 4) +
+    theme(
+      axis.title.x = element_blank(),
+      axis.title.y = element_blank(),
+      panel.grid.major = element_blank(),
+      panel.border = element_blank(),
+      panel.background = element_blank(),
+      axis.ticks = element_blank(),
+      legend.position = "bottom")
+}
+
+cormat_heatmap(select_if(df, is.numeric))
+
+
+ggpairs(select_if(df, is.numeric))
+```
+
+Also, by using Variance inflation factor (VIF), this point is corfirmed (when VIF is less than 10, indicating there is no strong multicollinearity)
+
+```{r Regression-4-4, warning=FALSE, error=FALSE, message=FALSE}
+pander(vif(lm(biden ~ age + gender + educ, data = df)))
+```
+
+
+## Interaction terms
+
+#### 1. Evaluate the marginal effect of age on Joe Biden thermometer rating, conditional on education. Consider the magnitude and direction of the marginal effect, as well as its statistical significance.
+
+The fomular for the model in this task is expressed as:
+
+*Biden Warmth* = *β*<sub>0</sub> + *β*<sub>1</sub>*Age* + *β*<sub>2</sub>*Education* + *β*<sub>3</sub>*Education* x *Age*
+
+```{r Interaction-1-1, warning=FALSE, error=FALSE, message=FALSE}
+inter_mod<- lm (biden ~ age*educ, data = df)
+pander(tidy(inter_mod))
+
+pander(glance(inter_mod))
+```
+The estimated parameter and standard error are reported in the first one of the above tables. Accodring to this table above, it is clear that there is strong association between the interaction term with the warmth toward Biden (*p*<0.005). The other statistical data for this model with interaction term is summarized in the second table above. 
+
+```{r Interaction-1-2, warning=FALSE, error=FALSE, message=FALSE}
+# function to get point estimates and standard errors
+# model - lm object
+# mod_var - name of moderating variable in the interaction
+instant_effect <- function(model, mod_var){
+  # get interaction term name
+  int.name <- names(model$coefficients)[[which(str_detect(names(model$coefficients), ":"))]]
+  
+  marg_var <- str_split(int.name, ":")[[1]][[which(str_split(int.name, ":")[[1]] != mod_var)]]
+  
+  # store coefficients and covariance matrix
+  beta.hat <- coef(model)
+  cov <- vcov(model)
+  
+  # possible set of values for mod_var
+  if(class(model)[[1]] == "lm"){
+    z <- seq(min(model$model[[mod_var]]), max(model$model[[mod_var]]))
+  } else {
+    z <- seq(min(model$data[[mod_var]]), max(model$data[[mod_var]]))
+  }
+  
+  # calculate instantaneous effect
+  dy.dx <- beta.hat[[marg_var]] + beta.hat[[int.name]] * z
+  
+  # calculate standard errors for instantaeous effect
+  se.dy.dx <- sqrt(cov[marg_var, marg_var] +
+                     z^2 * cov[int.name, int.name] +
+                     2 * z * cov[marg_var, int.name])
+  
+  # combine into data frame
+  data_frame(z = z,
+             dy.dx = dy.dx,
+             se = se.dy.dx)
+}
+
+# point range plot
+instant_effect(inter_mod, "educ") %>%
+  ggplot(aes(z, dy.dx,
+             ymin = dy.dx - 1.96 * se,
+             ymax = dy.dx + 1.96 * se)) +
+  geom_pointrange() +
+  geom_hline(yintercept = 0, linetype = 2) +
+  labs(title = "Marginal effect of age",
+       subtitle = "By education",
+       x = "education (year)",
+       y = "Estimated marginal effect")
+
+instant_effect(inter_mod, "educ") %>%
+  ggplot(aes(z, dy.dx)) +
+  geom_line() +
+  geom_line(aes(y = dy.dx - 1.96 * se), linetype = 2) +
+  geom_line(aes(y = dy.dx + 1.96 * se), linetype = 2) +
+  geom_hline(yintercept = 0) +
+  labs(title = "Marginal effect of age",
+       subtitle = "By education",
+       x = "education (year)",
+       y = "Estimated marginal effect")
+
+
+```
+
+The marginal effect of age on the condition of educaiton years is presented in the above two plots. I will discuss this marginal effect from the aspects of magnitude, casual direction and statistical significance. 
+
+* Magnitude and Causal direction: as the condition of education is fixed, then when the respondent with the minimal education year (0 year), the ψ<sub>1</sub> = 0.672-0.0048x0 = 0.672; when the respondent with the maximum education year (15 years), the the ψ<sub>2</sub> = 0.672-0.0048x15 = -0.048. This result indicates that as the education year increase, the marginal effect of age on the warmth toward Biden decreases: the difference between the elder and younger people in opinions about Biden are largest among those with little education, and smallest among those with higher education. 
+
+In addition, with regard to the standard error for the marginal effect of age, we can observe that: when educ=0, the standard error is the largest. as the education year incresaes, it become smaller until education year is around 12-13, then become a bit larger again at educ = 15.
+
+* statistical significance: 
+
+```{r Interaction-1-3, warning=FALSE, error=FALSE, message=FALSE}
+linearHypothesis(inter_mod, "age + age:educ")
+```
+
+According to the above hypothesis testing, it is obvious that the marginal effect of age is statistically significant. 
+
+#### 2. Evaluate the marginal effect of education on Joe Biden thermometer rating, conditional on age. Consider the magnitude and direction of the marginal effect, as well as its statistical significance.
+
+The model used in this task is the same as above.The marginal effect of education conditional on age is presented in the two plots below: 
+
+```{r Interaction-2-1, warning=FALSE, error=FALSE, message=FALSE}
+
+# point range plot
+instant_effect(inter_mod, "age") %>%
+  ggplot(aes(z, dy.dx,
+             ymin = dy.dx - 1.96 * se,
+             ymax = dy.dx + 1.96 * se)) +
+  geom_pointrange() +
+  geom_hline(yintercept = 0, linetype = 2) +
+  labs(title = "Marginal effect of education",
+       subtitle = "By age",
+       x = "age",
+       y = "Estimated marginal effect")
+
+instant_effect(inter_mod, "age") %>%
+  ggplot(aes(z, dy.dx)) +
+  geom_line() +
+  geom_line(aes(y = dy.dx - 1.96 * se), linetype = 2) +
+  geom_line(aes(y = dy.dx + 1.96 * se), linetype = 2) +
+  geom_hline(yintercept = 0) +
+  labs(title = "Marginal effect of education",
+       subtitle = "By age",
+       x = "age",
+       y = "Estimated marginal effect")
+
+
+```
+
+* Magnitude and Causal direction: as the condition of age is fixed, then for the youngest respondent (18-year old), the ψ<sub>1<\sub> = 1.657 -0.0048x0 = 1.657; for the eldest respondent (92-year old), the ψ<sub>2<\sub> = 1.657-0.0048x92 = -2.759. This result indicates that as the age increases, the marginal effect of education on the warmth toward Biden decreases: the difference between the people with higher education and lower education in opinions about Biden are largest among the youngest people, and smallest among elder people. 
+
+In addition, with regard to the standard error for the marginal effect of education, we can observe that: the standard error for this marginal effect of education is always very huge across age, indicating that perhaps this effect is not so significant as that of age.  
+
+* statistical significance: 
+
+```{r Interaction-2-2, warning=FALSE, error=FALSE, message=FALSE}
+linearHypothesis(inter_mod, "educ + age:educ")
+```
+
+According to the above hypothesis testing, it is obvious that the marginal effect of education is only moderately significant.
+
+With three continuous variables, we can start to consider three dimensional visualizations. For instance, we could represent this as a heatmap with contour lines: 
+```{r Interaction-2-3, warning=FALSE, error=FALSE, message=FALSE}
+df %>%
+  data_grid(age, educ) %>%
+  add_predictions(inter_mod) %>%
+  ggplot(aes(age,educ, z = pred, fill = pred)) +
+  geom_raster(interpolate = TRUE) +
+  scale_fill_gradient2(midpoint = 50) +
+  geom_contour() +
+  labs(title = "Expected Biden thermometer score",
+       x = "age",
+       y = "education",
+       fill = "Prediction")
+```
+
+## Missing data
+####This time, use multiple imputation to account for the missingness in the data. Consider the multivariate normality assumption and transform any variables as you see fit for the imputation stage. Calculate appropriate estimates of the parameters and the standard errors and explain how the results differ from the original, non-imputed model.
+
+First, in the 2323 observations in the original dataset, the missingness for each variable of interest are listed below. 
+```{r Missing-1, warning=FALSE, error=FALSE, message=FALSE}
+# summarize the missing data
+biden %>%
+  select(biden, age, female, educ) %>%
+  summarize_all(funs(sum(is.na(.)))) %>%
+  pander()
+
+
+```
+
+According to the dicussion in problem 1, when the polinomial forms of education was introduced into the original model, the problem of multivariate normality will be fixed to certain sense. Therefore, in the following sections, I will deploy this model as a reference.
+
+Below is the originial model in which the missing data has been listwisely deleted. 
+
+```{r Missing-2, warning=FALSE, error=FALSE, message=FALSE}
+mod_poly <- lm(biden ~ female + age + educ + I(educ^2) + I(educ^3), data = df)
+pander(tidy(mod_poly))
+```
+
+Impute the data by `Amelia()` function. Then,each of those complete imputed data was plotted (Biden rating vs. age) as below. 
+
+```{r Missing-3, warning=FALSE, error=FALSE, message=FALSE}
+
+# transform the original dataset to dataframe
+b.out <- amelia(as.data.frame(biden), m=5)
+
+#The list of imputed data frames is stored in the imputations element
+str(b.out$imputations, max.level = 2)
+
+# plot each of the imputed complete dataframes
+b.out$imputations %>%
+  map(~ ggplot(.x, aes(biden, age)) +
+  geom_point(alpha=0.2) +
+  geom_smooth(se = FALSE) +
+  labs(x = "age",
+       y = "Warmth toward Biden"))
+```
+
+Then, I estimate the linear model from before on the new imputed datasets and extract the coeffecients and standard errors. To conduct inference, we need to average the estimates of the coefficients and the standard errors. `mi.meld()`. Here, we can observe some differences in the estimated parameters for the truncated dataset and the averaged imputed dataset.  
+```{r Missing-4, warning=FALSE, error=FALSE, message=FALSE}
+models_imp <- data_frame(data = b.out$imputations) %>%
+  mutate(model = map(data, ~ lm(biden ~ female + age + educ + I(educ^2) + I(educ^3),
+                                data = .x)),
+         coef = map(model, tidy)) %>%
+  unnest(coef, .id = "id")
+
+models_imp
+
+mi.meld.plus <- function(df_tidy){
+  # transform data into appropriate matrix shape
+  coef.out <- df_tidy %>%
+    select(id:estimate) %>%
+    spread(term, estimate) %>%
+    select(-id)
+  
+  se.out <- df_tidy %>%
+    select(id, term, std.error) %>%
+    spread(term, std.error) %>%
+    select(-id)
+  
+  combined.results <- mi.meld(q = coef.out, se = se.out)
+  
+  data_frame(term = colnames(combined.results$q.mi),
+             estimate.mi = combined.results$q.mi[1, ],
+             std.error.mi = combined.results$se.mi[1, ])
+}
+
+
+# compare results
+summary_mod<-tidy(mod_poly) %>%
+  left_join(mi.meld.plus(models_imp)) %>%
+  select(-statistic, -p.value)
+
+pander(summary_mod)
+```
+
+Also, the missingness in the dataset is visualized in the heatmap. Furthermore, by using the `Amelia()`, we can direclty do the transformation of variable `educ` when processing the imputed models.Below, I also compare the averaged coeffecients and other parameters from this trasnformative imputed model with the original listwise deleted model.
+
+```{r Missing-5, warning=FALSE, error=FALSE, message=FALSE}
+# heatmap the missing data
+missmap(b.out)
+
+b_lite <- biden %>%
+  select(biden, age, female, educ)
+
+b_lite.out <- amelia(b_lite, m = 5,
+                      sqrt = c("educ"), cube = c("educ"))
+
+models_trans_imp <- data_frame(data = b_lite.out$imputations) %>%
+  mutate(model = map(data, ~ lm(biden ~ female + age + educ + I(educ^2) + I(educ^3),
+                                data = .x)),
+         coef = map(model, tidy)) %>%
+  unnest(coef, .id = "id")
+
+summary_mod2<-tidy(mod_poly) %>%
+  left_join(mi.meld.plus(models_trans_imp)) %>%
+  select(-statistic, -p.value)
+
+pander(summary_mod2)
+```
+
+
+
+```{r Missing-6, warning=FALSE, error=FALSE, message=FALSE}
+# Compare the parameters in three models 
+bind_rows(orig = tidy(mod_poly),
+          full_imp = mi.meld.plus(models_imp) %>%
+            rename(estimate = estimate.mi,
+                   std.error = std.error.mi),
+          trans_imp = mi.meld.plus(models_trans_imp) %>%
+            rename(estimate = estimate.mi,
+                   std.error = std.error.mi),
+          .id = "method") %>%
+  mutate(method = factor(method, levels = c("orig", "full_imp", "trans_imp"),
+                         labels = c("Listwise deletion", "Full imputation",
+                                    "Transformed imputation")),
+         term = factor(term, levels = c("(Intercept)", "female",
+                                        "age", "educ", "I(educ^2)", "I(educ^3)"),
+                       labels = c("Intercept",  "gender(female=1)", "age", "educ", "educ^2", "educ^3"))) %>%
+  ggplot(aes(fct_rev(term), estimate, color = fct_rev(method),
+             ymin = estimate - 1.96 * std.error,
+             ymax = estimate + 1.96 * std.error)) +
+  geom_hline(yintercept = 0, linetype = 2) +
+  geom_pointrange(position = position_dodge(.75)) +
+  coord_flip() +
+  scale_color_discrete(guide = guide_legend(reverse = TRUE)) +
+  labs(title = "Comparing regression results",
+       x = NULL,
+       y = "Estimated parameter",
+       color = NULL) +
+  theme(legend.position = "bottom")
+
+# Without the interception:
+
+bind_rows(orig = tidy(mod_poly),
+          full_imp = mi.meld.plus(models_imp) %>%
+            rename(estimate = estimate.mi,
+                   std.error = std.error.mi),
+          trans_imp = mi.meld.plus(models_trans_imp) %>%
+            rename(estimate = estimate.mi,
+                   std.error = std.error.mi),
+          .id = "method") %>%
+  mutate(method = factor(method, levels = c("orig", "full_imp", "trans_imp"),
+                         labels = c("Listwise deletion", "Full imputation",
+                                    "Transformed imputation")),
+         term = factor(term, levels = c("(Intercept)", "female",
+                                        "age", "educ", "I(educ^2)", "I(educ^3)"),
+                       labels = c("Intercept",  "gender(female=1)", "age", "educ", "educ^2", "educ^3"))) %>%
+  filter(term != "Intercept") %>%
+  ggplot(aes(fct_rev(term), estimate, color = fct_rev(method),
+             ymin = estimate - 1.96 * std.error,
+             ymax = estimate + 1.96 * std.error)) +
+  geom_hline(yintercept = 0, linetype = 2) +
+  geom_pointrange(position = position_dodge(.75)) +
+  coord_flip() +
+  scale_color_discrete(guide = guide_legend(reverse = TRUE)) +
+  labs(title = "Comparing regression results",
+       x = NULL,
+       y = "Estimated parameter",
+       color = NULL) +
+  theme(legend.position = "bottom")
+
+
+
+```
+
+In conclusion, compared with the origninal model, the full and transformative imputed models do not have significant changes in their estimated co-effecients, although the co-effecients on educ: Likewise-deletion > Full impution > Transformed impution; co-effecients on gender: Likewise-deletion > Transformed impution > Full impution; co-effecients on educ^2: Transformed impution > Full impution > Likewise-deletion. However, the standard errors for almost all the explantory variables, especially educ and gender, are a little bit smaller in the imputed models than in the original models with listwisely deleted dataset. This result indicates that in our case, the imputed model can overcome the problem of missingness to certain extent, although the robustness of it is not more extraordinary than the original model. 
